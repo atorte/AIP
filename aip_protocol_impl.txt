@@ -1,0 +1,511 @@
+#ifndef AIP_PROTOCOL_H
+#define AIP_PROTOCOL_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <openssl/evp.h>
+#include <openssl/ec.h>
+#include <openssl/sha.h>
+
+// AIP协议常量定义
+#define AIP_VERSION 1
+#define AIP_MIN_HEADER_SIZE 32
+#define AIP_MAX_PACKET_SIZE 65535
+#define AIP_MAX_HOPS 64
+#define AIP_FLOW_ID_SIZE 8
+#define AIP_TIMESTAMP_SIZE 8
+
+// 地址类型定义
+typedef enum {
+    AIP_ADDR_IPV4_COMPAT = 0,
+    AIP_ADDR_IPV6_COMPAT = 1,
+    AIP_ADDR_GEOGRAPHIC = 2,
+    AIP_ADDR_SERVICE = 3,
+    AIP_ADDR_HYBRID = 4
+} aip_addr_type_t;
+
+// 标志位定义
+#define AIP_FLAG_ENCRYPT    0x01
+#define AIP_FLAG_AUTH       0x02
+#define AIP_FLAG_COMPRESS   0x04
+#define AIP_FLAG_FRAGMENT   0x08
+#define AIP_FLAG_URGENT     0x10
+
+// 服务类型定义
+typedef enum {
+    AIP_SERVICE_BEST_EFFORT = 0x00,
+    AIP_SERVICE_REALTIME_VIDEO = 0x01,
+    AIP_SERVICE_REALTIME_AUDIO = 0x02,
+    AIP_SERVICE_ONLINE_GAMING = 0x03,
+    AIP_SERVICE_FILE_TRANSFER = 0x04,
+    AIP_SERVICE_IOT_SENSOR = 0x05
+} aip_service_class_t;
+
+// 优先级等级定义
+typedef enum {
+    AIP_PRIORITY_EMERGENCY = 0,
+    AIP_PRIORITY_REALTIME = 1,
+    AIP_PRIORITY_INTERACTIVE = 2,
+    AIP_PRIORITY_BULK = 3,
+    AIP_PRIORITY_BACKGROUND = 4
+} aip_priority_t;
+
+// AIP基础包头结构
+typedef struct __attribute__((packed)) {
+    uint8_t version:4;           // 协议版本
+    uint8_t addr_type:4;         // 地址类型
+    uint8_t flags;               // 控制标志
+    uint8_t service_class;       // 服务类型
+    uint8_t hop_limit;           // 跳数限制
+    uint16_t payload_length;     // 负载长度
+    uint16_t header_length;      // 头部长度
+    uint64_t flow_id;            // 流标识
+    uint64_t timestamp;          // 时间戳
+} aip_basic_header_t;
+
+// 地理位置地址结构
+typedef struct __attribute__((packed)) {
+    uint8_t continent:4;         // 洲际代码
+    uint8_t reserved:4;
+    uint8_t country;             // 国家代码
+    uint16_t region;             // 地区代码
+    uint16_t city;               // 城市代码
+    uint32_t area:24;            // 区域代码
+    uint32_t subnet:8;           // 子网代码
+} aip_geo_addr_t;
+
+// 服务标识地址结构
+typedef struct __attribute__((packed)) {
+    uint16_t service_type;       // 服务类型
+    uint16_t provider_id;        // 服务提供商ID
+    uint32_t instance_id;        // 服务实例ID
+} aip_service_addr_t;
+
+// 混合地址结构
+typedef struct {
+    aip_addr_type_t type;
+    union {
+        struct in_addr ipv4;
+        struct in6_addr ipv6;
+        aip_geo_addr_t geo;
+        aip_service_addr_t service;
+    } addr;
+} aip_address_t;
+
+// 扩展头结构
+typedef struct __attribute__((packed)) {
+    uint8_t next_header;         // 下一个头类型
+    uint8_t hdr_ext_len;         // 扩展头长度
+    uint16_t extension_type;     // 扩展类型
+    uint8_t data[];              // 扩展数据
+} aip_ext_header_t;
+
+// 完整AIP包头结构
+typedef struct {
+    aip_basic_header_t basic;
+    aip_address_t src_addr;
+    aip_address_t dst_addr;
+    aip_ext_header_t *ext_headers;
+    uint16_t ext_header_count;
+} aip_header_t;
+
+// 路径信息结构
+typedef struct {
+    double avg_latency;          // 平均延迟 (ms)
+    double available_bandwidth;  // 可用带宽 (Mbps)
+    double total_bandwidth;      // 总带宽 (Mbps)
+    double packet_loss_rate;     // 丢包率
+    double cost;                 // 路径成本
+    int hop_count;               // 跳数
+    time_t last_update;          // 最后更新时间
+} aip_path_info_t;
+
+// QoS参数结构
+typedef struct {
+    aip_priority_t priority;     // 优先级
+    uint32_t max_latency;        // 最大延迟 (ms)
+    uint32_t min_bandwidth;      // 最小带宽 (Kbps)
+    double min_reliability;      // 最小可靠性
+} aip_qos_params_t;
+
+// 加密上下文结构
+typedef struct {
+    EVP_CIPHER_CTX *encrypt_ctx;
+    EVP_CIPHER_CTX *decrypt_ctx;
+    uint8_t key[32];             // AES-256密钥
+    uint8_t iv[16];              // 初始化向量
+    bool is_initialized;
+} aip_crypto_ctx_t;
+
+// 路由表项结构
+typedef struct {
+    aip_address_t destination;
+    aip_address_t next_hop;
+    aip_path_info_t path_info;
+    time_t expiry_time;
+} aip_route_entry_t;
+
+// 路由表结构
+typedef struct {
+    aip_route_entry_t *entries;
+    size_t count;
+    size_t capacity;
+} aip_routing_table_t;
+
+// AIP协议上下文
+typedef struct {
+    aip_routing_table_t routing_table;
+    aip_crypto_ctx_t crypto_ctx;
+    aip_qos_params_t default_qos;
+    uint64_t flow_counter;
+    bool compression_enabled;
+} aip_context_t;
+
+// ============================================================================
+// 核心函数声明
+// ============================================================================
+
+// 初始化和清理
+int aip_init(aip_context_t *ctx);
+void aip_cleanup(aip_context_t *ctx);
+
+// 包头处理
+int aip_create_header(aip_header_t *header, const aip_address_t *src, 
+                      const aip_address_t *dst, aip_service_class_t service);
+int aip_parse_header(const uint8_t *data, size_t len, aip_header_t *header);
+int aip_serialize_header(const aip_header_t *header, uint8_t *buffer, size_t *len);
+
+// 地址处理
+int aip_create_geo_address(aip_address_t *addr, uint8_t continent, uint8_t country,
+                          uint16_t region, uint16_t city, uint32_t area);
+int aip_create_service_address(aip_address_t *addr, uint16_t service_type,
+                              uint16_t provider_id, uint32_t instance_id);
+int aip_address_to_string(const aip_address_t *addr, char *str, size_t len);
+int aip_string_to_address(const char *str, aip_address_t *addr);
+
+// 路由算法
+double aip_calculate_route_score(const aip_path_info_t *path, 
+                                const aip_header_t *packet);
+int aip_find_best_route(aip_context_t *ctx, const aip_address_t *dst,
+                       aip_route_entry_t **route);
+int aip_update_routing_table(aip_context_t *ctx, const aip_address_t *dst,
+                            const aip_address_t *next_hop, 
+                            const aip_path_info_t *path_info);
+
+// 安全功能
+int aip_crypto_init(aip_crypto_ctx_t *ctx, const uint8_t *key);
+int aip_encrypt_payload(aip_crypto_ctx_t *ctx, const uint8_t *plaintext,
+                       size_t plaintext_len, uint8_t *ciphertext,
+                       size_t *ciphertext_len);
+int aip_decrypt_payload(aip_crypto_ctx_t *ctx, const uint8_t *ciphertext,
+                       size_t ciphertext_len, uint8_t *plaintext,
+                       size_t *plaintext_len);
+
+// QoS和流量控制
+int aip_classify_traffic(const aip_header_t *header, aip_priority_t *priority);
+int aip_apply_qos_policy(aip_context_t *ctx, aip_header_t *header);
+bool aip_check_qos_requirements(const aip_path_info_t *path,
+                               const aip_qos_params_t *requirements);
+
+// 包处理
+int aip_send_packet(aip_context_t *ctx, const aip_address_t *dst,
+                   const uint8_t *payload, size_t payload_len,
+                   aip_service_class_t service);
+int aip_receive_packet(aip_context_t *ctx, uint8_t *buffer, size_t buffer_len,
+                      aip_header_t *header, uint8_t **payload, size_t *payload_len);
+
+// ============================================================================
+// 核心函数实现
+// ============================================================================
+
+// 初始化AIP协议上下文
+int aip_init(aip_context_t *ctx) {
+    if (!ctx) return -1;
+    
+    memset(ctx, 0, sizeof(aip_context_t));
+    
+    // 初始化路由表
+    ctx->routing_table.capacity = 1000;
+    ctx->routing_table.entries = malloc(sizeof(aip_route_entry_t) * 
+                                       ctx->routing_table.capacity);
+    if (!ctx->routing_table.entries) return -1;
+    
+    // 设置默认QoS参数
+    ctx->default_qos.priority = AIP_PRIORITY_BULK;
+    ctx->default_qos.max_latency = 1000;  // 1秒
+    ctx->default_qos.min_bandwidth = 100; // 100Kbps
+    ctx->default_qos.min_reliability = 0.95;
+    
+    ctx->flow_counter = 1;
+    ctx->compression_enabled = true;
+    
+    return 0;
+}
+
+// 清理AIP协议上下文
+void aip_cleanup(aip_context_t *ctx) {
+    if (!ctx) return;
+    
+    if (ctx->routing_table.entries) {
+        free(ctx->routing_table.entries);
+    }
+    
+    if (ctx->crypto_ctx.is_initialized) {
+        EVP_CIPHER_CTX_free(ctx->crypto_ctx.encrypt_ctx);
+        EVP_CIPHER_CTX_free(ctx->crypto_ctx.decrypt_ctx);
+    }
+    
+    memset(ctx, 0, sizeof(aip_context_t));
+}
+
+// 创建AIP包头
+int aip_create_header(aip_header_t *header, const aip_address_t *src,
+                     const aip_address_t *dst, aip_service_class_t service) {
+    if (!header || !src || !dst) return -1;
+    
+    memset(header, 0, sizeof(aip_header_t));
+    
+    // 设置基础头部
+    header->basic.version = AIP_VERSION;
+    header->basic.addr_type = dst->type;
+    header->basic.service_class = service;
+    header->basic.hop_limit = AIP_MAX_HOPS;
+    header->basic.header_length = AIP_MIN_HEADER_SIZE;
+    
+    // 生成流ID和时间戳
+    header->basic.flow_id = (uint64_t)time(NULL) << 32 | rand();
+    header->basic.timestamp = time(NULL);
+    
+    // 复制地址
+    memcpy(&header->src_addr, src, sizeof(aip_address_t));
+    memcpy(&header->dst_addr, dst, sizeof(aip_address_t));
+    
+    return 0;
+}
+
+// 创建地理位置地址
+int aip_create_geo_address(aip_address_t *addr, uint8_t continent, 
+                          uint8_t country, uint16_t region, uint16_t city,
+                          uint32_t area) {
+    if (!addr) return -1;
+    
+    addr->type = AIP_ADDR_GEOGRAPHIC;
+    addr->addr.geo.continent = continent;
+    addr->addr.geo.country = country;
+    addr->addr.geo.region = region;
+    addr->addr.geo.city = city;
+    addr->addr.geo.area = area & 0xFFFFFF;
+    
+    return 0;
+}
+
+// 创建服务标识地址
+int aip_create_service_address(aip_address_t *addr, uint16_t service_type,
+                              uint16_t provider_id, uint32_t instance_id) {
+    if (!addr) return -1;
+    
+    addr->type = AIP_ADDR_SERVICE;
+    addr->addr.service.service_type = service_type;
+    addr->addr.service.provider_id = provider_id;
+    addr->addr.service.instance_id = instance_id;
+    
+    return 0;
+}
+
+// 路由评分算法实现
+double aip_calculate_route_score(const aip_path_info_t *path,
+                                const aip_header_t *packet) {
+    if (!path || !packet) return 0.0;
+    
+    double score = 0.0;
+    
+    // 延迟因子 (权重: 0.3)
+    double latency_score = 1.0 / (1.0 + path->avg_latency / 1000.0);
+    score += 0.3 * latency_score;
+    
+    // 带宽因子 (权重: 0.25)
+    double bandwidth_score = 0.0;
+    if (path->total_bandwidth > 0) {
+        bandwidth_score = path->available_bandwidth / path->total_bandwidth;
+    }
+    score += 0.25 * bandwidth_score;
+    
+    // 可靠性因子 (权重: 0.2)
+    double reliability_score = 1.0 - path->packet_loss_rate;
+    score += 0.2 * reliability_score;
+    
+    // 成本因子 (权重: 0.15)
+    double cost_score = 1.0 / (1.0 + path->cost);
+    score += 0.15 * cost_score;
+    
+    // 服务匹配因子 (权重: 0.1)
+    double service_score = 0.5; // 简化实现
+    switch (packet->basic.service_class) {
+        case AIP_SERVICE_REALTIME_VIDEO:
+        case AIP_SERVICE_REALTIME_AUDIO:
+            if (path->avg_latency < 50) service_score = 1.0;
+            break;
+        case AIP_SERVICE_FILE_TRANSFER:
+            if (path->available_bandwidth > 10) service_score = 1.0;
+            break;
+        default:
+            service_score = 0.7;
+    }
+    score += 0.1 * service_score;
+    
+    return score;
+}
+
+// 查找最佳路由
+int aip_find_best_route(aip_context_t *ctx, const aip_address_t *dst,
+                       aip_route_entry_t **route) {
+    if (!ctx || !dst || !route) return -1;
+    
+    *route = NULL;
+    double best_score = -1.0;
+    
+    for (size_t i = 0; i < ctx->routing_table.count; i++) {
+        aip_route_entry_t *entry = &ctx->routing_table.entries[i];
+        
+        // 检查目标地址匹配
+        if (memcmp(&entry->destination, dst, sizeof(aip_address_t)) == 0) {
+            // 创建临时包头用于评分
+            aip_header_t temp_header = {0};
+            temp_header.basic.service_class = AIP_SERVICE_BEST_EFFORT;
+            
+            double score = aip_calculate_route_score(&entry->path_info, &temp_header);
+            
+            if (score > best_score) {
+                best_score = score;
+                *route = entry;
+            }
+        }
+    }
+    
+    return (*route != NULL) ? 0 : -1;
+}
+
+// 加密初始化
+int aip_crypto_init(aip_crypto_ctx_t *ctx, const uint8_t *key) {
+    if (!ctx || !key) return -1;
+    
+    ctx->encrypt_ctx = EVP_CIPHER_CTX_new();
+    ctx->decrypt_ctx = EVP_CIPHER_CTX_new();
+    
+    if (!ctx->encrypt_ctx || !ctx->decrypt_ctx) {
+        return -1;
+    }
+    
+    memcpy(ctx->key, key, 32);
+    
+    // 生成随机IV
+    if (RAND_bytes(ctx->iv, 16) != 1) {
+        return -1;
+    }
+    
+    ctx->is_initialized = true;
+    return 0;
+}
+
+// 数据加密
+int aip_encrypt_payload(aip_crypto_ctx_t *ctx, const uint8_t *plaintext,
+                       size_t plaintext_len, uint8_t *ciphertext,
+                       size_t *ciphertext_len) {
+    if (!ctx || !ctx->is_initialized || !plaintext || !ciphertext || !ciphertext_len) {
+        return -1;
+    }
+    
+    int len;
+    int ciphertext_length;
+    
+    // 初始化加密操作
+    if (EVP_EncryptInit_ex(ctx->encrypt_ctx, EVP_aes_256_gcm(), NULL, 
+                          ctx->key, ctx->iv) != 1) {
+        return -1;
+    }
+    
+    // 加密数据
+    if (EVP_EncryptUpdate(ctx->encrypt_ctx, ciphertext, &len, 
+                         plaintext, plaintext_len) != 1) {
+        return -1;
+    }
+    ciphertext_length = len;
+    
+    // 完成加密
+    if (EVP_EncryptFinal_ex(ctx->encrypt_ctx, ciphertext + len, &len) != 1) {
+        return -1;
+    }
+    ciphertext_length += len;
+    
+    *ciphertext_len = ciphertext_length;
+    return 0;
+}
+
+// 流量分类
+int aip_classify_traffic(const aip_header_t *header, aip_priority_t *priority) {
+    if (!header || !priority) return -1;
+    
+    switch (header->basic.service_class) {
+        case AIP_SERVICE_REALTIME_VIDEO:
+        case AIP_SERVICE_REALTIME_AUDIO:
+            *priority = AIP_PRIORITY_REALTIME;
+            break;
+        case AIP_SERVICE_ONLINE_GAMING:
+            *priority = AIP_PRIORITY_INTERACTIVE;
+            break;
+        case AIP_SERVICE_FILE_TRANSFER:
+            *priority = AIP_PRIORITY_BULK;
+            break;
+        case AIP_SERVICE_IOT_SENSOR:
+            *priority = AIP_PRIORITY_BACKGROUND;
+            break;
+        default:
+            *priority = AIP_PRIORITY_BULK;
+    }
+    
+    // 检查紧急标志
+    if (header->basic.flags & AIP_FLAG_URGENT) {
+        *priority = AIP_PRIORITY_EMERGENCY;
+    }
+    
+    return 0;
+}
+
+// 地址转字符串
+int aip_address_to_string(const aip_address_t *addr, char *str, size_t len) {
+    if (!addr || !str || len == 0) return -1;
+    
+    switch (addr->type) {
+        case AIP_ADDR_GEOGRAPHIC:
+            snprintf(str, len, "geo:%d.%d.%d.%d.%d",
+                    addr->addr.geo.continent,
+                    addr->addr.geo.country,
+                    addr->addr.geo.region,
+                    addr->addr.geo.city,
+                    addr->addr.geo.area);
+            break;
+        case AIP_ADDR_SERVICE:
+            snprintf(str, len, "svc:%d.%d.%d",
+                    addr->addr.service.service_type,
+                    addr->addr.service.provider_id,
+                    addr->addr.service.instance_id);
+            break;
+        case AIP_ADDR_IPV4_COMPAT:
+            inet_ntop(AF_INET, &addr->addr.ipv4, str, len);
+            break;
+        case AIP_ADDR_IPV6_COMPAT:
+            inet_ntop(AF_INET6, &addr->addr.ipv6, str, len);
+            break;
+        default:
+            snprintf(str, len, "unknown");
+            return -1;
+    }
+    
+    return 0;
+}
+
+#endif // AIP_PROTOCOL_H
